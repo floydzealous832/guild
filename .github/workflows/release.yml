@@ -1,0 +1,76 @@
+# .github/workflows/release.yml
+#
+# Triggered on version tag pushes (v*.*.*). Produces 6 signed binaries,
+# SHA256 checksums, cosign signatures, and a Homebrew formula update.
+#
+# Required secrets (set in repository Settings → Secrets → Actions):
+#   HOMEBREW_TAP_GITHUB_TOKEN  — fine-grained PAT with Contents:write on
+#                                 github.com/mathomhaus/homebrew-tap
+#
+# Standard GITHUB_TOKEN is used for the release upload (automatic).
+# No signing key is needed: cosign uses keyless OIDC signing via Sigstore.
+#
+# Verify a downloaded release:
+#   cosign verify-blob \
+#     --certificate checksums.txt.pem \
+#     --signature checksums.txt.sig \
+#     --certificate-identity-regexp="https://github.com/mathomhaus/guild" \
+#     --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
+#     checksums.txt
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write   # create GitHub release + upload assets
+  id-token: write   # cosign keyless signing via OIDC
+  packages: write   # future: GHCR image publish (not used yet)
+
+jobs:
+  goreleaser:
+    name: goreleaser release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Fetch all history so goreleaser can generate a proper changelog
+          # and correctly detect the previous tag for the diff.
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Must match go.mod directive. Update together.
+          go-version: '1.25'
+          cache: true
+
+      # Install cosign for keyless signing. The version pin avoids surprises
+      # from API changes in the cosign CLI between major versions.
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: 'v2.4.3'
+
+      # goreleaser-action v6 supports goreleaser v2 natively.
+      # CGO_ENABLED=0 is set in .goreleaser.yml; repeating it here is
+      # belt-and-suspenders to make the intent explicit in CI logs.
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # PAT with Contents:write on github.com/mathomhaus/homebrew-tap.
+          # Create at: https://github.com/settings/personal-access-tokens
+          # Then add under: repo Settings → Secrets → Actions
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          # CGO_ENABLED=0 belt-and-suspenders (also set in .goreleaser.yml builds.env)
+          CGO_ENABLED: '0'

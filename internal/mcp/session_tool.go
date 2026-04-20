@@ -1,0 +1,363 @@
+package mcp
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/mathomhaus/guild/internal/lore"
+	"github.com/mathomhaus/guild/internal/project"
+	"github.com/mathomhaus/guild/internal/quest"
+	"github.com/mathomhaus/guild/internal/session"
+)
+
+// mcpProjectResolver is the Resolver used by handleSessionStart when the
+// agent omits the project arg and we need to auto-infer from the MCP
+// server's cwd. Package-level so tests can swap in fake Getwd /
+// GitToplevel seams without exec'ing real git.
+//
+// Production default wires to os.Getwd and real git; tests assign a
+// Resolver{} literal with stubbed seams.
+var mcpProjectResolver = project.DefaultResolver
+
+// sessionStartInput is the typed input for the [guild_session_start]
+// tool. Struct-tag-driven schema: [mcp.AddTool]'s generic variant reads
+// `json` + `jsonschema` tags to produce the JSON Schema agents see.
+//
+// Description copy is intentionally lean — the WHAT/WHEN lives here; the
+// discipline (why to call this first, what it loads) lives in the
+// INSTRUCTIONS string loaded once at session start. Keep this struct
+// deliberately small so the other tools can follow the same pattern
+// without repeating the same workflow guidance.
+type sessionStartInput struct {
+	// Project is the directory basename of the project to activate.
+	// Optional — when omitted, the handler auto-infers the project by
+	// running `git rev-parse --show-toplevel` in the MCP server's cwd
+	// and looking the result up in the projects table. An explicit
+	// value always wins over the inferred one.
+	Project string `json:"project,omitempty" jsonschema:"directory basename, e.g. 'guild'. Optional — when omitted, auto-infers from the MCP server's cwd via git-toplevel lookup. Pass explicitly to override or when cwd auto-inference can't reach the project. Auto-infer handles git worktrees — falls back to the main-repo path if the worktree path isn't registered."`
+}
+
+// sessionStartTool is the [mcp.Tool] descriptor for guild_session_start.
+// Declared as a package-level value so server_test.go can assert on the
+// registered tool shape without reaching into the SDK's feature set.
+//
+// The Description covers WHAT it does and WHEN to use it. The full
+// "why this is mandatory before other tools" discipline lives in
+// INSTRUCTIONS, loaded once per session rather than repeated per-tool.
+var sessionStartTool = &sdkmcp.Tool{
+	Name: "guild_session_start",
+	Description: "Call FIRST. Set the active project, load the " +
+		"briefing, oath, and top task, and default later guild " +
+		"tools to it.",
+}
+
+// registerSessionStart wires guild_session_start onto s. Package-
+// private so Serve is the only public construction path.
+//
+// The handler closure captures no state beyond its input: all
+// persistence goes through [session.SetActiveProject] (per-PID file at
+// ~/.guild/sessions/<pid>.json) and bounties/oath payloads are
+// resolved on every call from the project's registered DBs.
+func registerSessionStart(s *sdkmcp.Server) {
+	sdkmcp.AddTool(s, sessionStartTool, handleSessionStart)
+}
+
+// handleSessionStart is the tool handler. Thin: validate input,
+// persist active project, then load the live bounties + oath snapshot
+// through quest.Bounties + lore.Oath so the agent receives the real
+// briefing + top task on the very first call.
+//
+// The ctx parameter is threaded through the session.Save path and every
+// downstream DB call so a client-side cancellation aborts the whole
+// bootstrap.
+func handleSessionStart(
+	ctx context.Context,
+	_ *sdkmcp.CallToolRequest,
+	in sessionStartInput,
+) (*sdkmcp.CallToolResult, any, error) {
+	start := time.Now()
+	var handlerErr error
+	var respBytes uint
+	//nolint:gocritic // ptrToRefParam — defer reads late-bound values
+	defer recordMCPTelemetry(ctx, "guild_session_start", start, &handlerErr, &respBytes)
+	// Tell the hint engine we saw a session-start so the no-session-start
+	// rule suppresses for this session.
+	hintsRecordBootstrap("guild_session_start")
+
+	name := strings.TrimSpace(in.Project)
+	var viaWorktreeFallback bool
+	if name == "" {
+		// Auto-infer from the MCP server's cwd via git-toplevel lookup.
+		// An explicit project arg would have taken the fast path above;
+		// we only reach here when the agent called guild_session_start()
+		// with no args. The inference pipeline is the same one the CLI
+		// uses (project.Resolve), reused so MCP and CLI can't diverge
+		// on which cwd resolves to which project.
+		inferred, fallback, err := inferProjectFromCWD(ctx)
+		if err != nil {
+			// Recoverable: the agent can fix by passing project=... or
+			// by registering the project with guild init. Surface the
+			// resolver's message verbatim (it already lists registered
+			// project names when the cwd-path isn't registered).
+			return toolErrorf(
+				"no project arg given and auto-inference from cwd failed: %v — "+
+					"pass guild_session_start(project='<directory-name>') explicitly, "+
+					"or run 'guild init' in the current project to register it.",
+				err,
+			), nil, nil
+		}
+		name = inferred
+		viaWorktreeFallback = fallback
+	}
+
+	if err := session.SetActiveProject(ctx, name); err != nil {
+		// Persist failures are fatal from the agent's POV: retrying
+		// won't help if the home directory is unwritable. Surface the
+		// OS-level detail so the user (not the agent) can fix it.
+		return toolFatalf("persist active project %q: %v", name, err), nil, nil
+	}
+
+	// Narrate the state change inline so the host's collapsed-MCP UX
+	// doesn't hide it from the user. When the worktree fallback fired,
+	// append a suffix so the agent and user see how the project was
+	// resolved (worktree cwd → main-repo path → project registration).
+	header := fmt.Sprintf("[active project set to %q]", name)
+	if viaWorktreeFallback {
+		header += " — inferred from worktree's main-repo path"
+	}
+
+	// Try to load the bounties snapshot. Graceful-degradation: if the
+	// project isn't registered yet (fresh `guild init` path) or either
+	// DB is unreachable, we still return success with the narration
+	// header — the agent can proceed and register via lore/quest init.
+	//
+	// renderBounties always returns a non-empty structural block:
+	// section headers render even on an empty project so first-time
+	// users see the shape (QUEST-1).
+	body := renderBounties(ctx, name, false /* briefOnly */)
+	if body == "" {
+		body = emptyBountiesSkeleton()
+	}
+
+	full := header + "\n\n" + body
+	respBytes = uint(len(full))
+	return textResult(full), nil, nil
+}
+
+// renderBounties loads the briefing + oath + top task for projectID
+// and returns a compact text block. Empty string when no data is
+// available — caller supplies a friendly fallback.
+//
+// Failures are swallowed: bootstrap should never hard-error on a cold
+// DB, because the agent's recovery path (init the project) depends on
+// reaching the post-bootstrap tool surface.
+func renderBounties(ctx context.Context, projectID string, briefOnly bool) string {
+	questDB, err := openQuestDB(ctx)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = questDB.Close() }()
+
+	// Optional lore wiring: if the lore DB is unreachable we still
+	// surface quest bounties without oath/echoes. Matches the CLI's
+	// graceful-degradation pattern in quest_agent.go.
+	var oathLoader quest.OathLoader
+	var echoLoader quest.EchoLoader
+	loreDB, loreErr := openLoreDB(ctx)
+	if loreErr == nil && !briefOnly {
+		defer func() { _ = loreDB.Close() }()
+		oathLoader = func(ctx context.Context, proj string) ([]quest.OathEntry, error) {
+			entries, err := lore.Oath(ctx, loreDB, proj)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]quest.OathEntry, len(entries))
+			for i, e := range entries {
+				out[i] = quest.OathEntry{Title: e.Title, Summary: e.Summary}
+			}
+			return out, nil
+		}
+		echoLoader = func(ctx context.Context, proj string) ([]quest.EchoEntry, error) {
+			echoes, err := lore.Echoes(ctx, loreDB, proj, false)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]quest.EchoEntry, len(echoes))
+			for i, e := range echoes {
+				out[i] = quest.EchoEntry{Title: e.Entry.Title, Reason: e.Reason}
+			}
+			return out, nil
+		}
+	}
+
+	res, err := quest.Bounties(ctx, questDB, projectID, briefOnly, oathLoader, echoLoader)
+	if err != nil {
+		// Project not registered yet, or no quests posted: degrade
+		// cleanly rather than bubbling a bootstrap failure.
+		return ""
+	}
+	return formatBounties(res, briefOnly)
+}
+
+// formatBounties renders a BountiesResult as the text block the
+// session-start handler returns. Every section header
+// (briefing / oath / echoes / bounties / parallelism) is printed
+// unconditionally so first-time users see the full shape even on an
+// empty project (QUEST-1); populated sections render their contents
+// underneath, empty sections render "(none yet)" placeholders with a
+// one-line hint for how to populate them.
+//
+// Matches the CLI's emoji-prefixed output where it's load-bearing but
+// omits the more verbose CLI decorations that don't help agents.
+func formatBounties(res *quest.BountiesResult, briefOnly bool) string {
+	var b strings.Builder
+
+	// Section 1: last briefing.
+	if res.LastBriefText != "" {
+		b.WriteString(fmt.Sprintf("📋 last briefing [%s] by %s:\n",
+			res.LastBriefAt, res.LastBriefAgent))
+		b.WriteString("  ")
+		b.WriteString(res.LastBriefText)
+		b.WriteString("\n\n")
+	} else {
+		b.WriteString("📋 last briefing: (none yet) — call quest_brief before session end to leave a note for the next agent.\n\n")
+	}
+
+	if briefOnly {
+		return strings.TrimRight(b.String(), "\n")
+	}
+
+	// Section 2: oath (principles).
+	if len(res.Oath) > 0 {
+		b.WriteString(fmt.Sprintf("⚔️ %d oath(s):\n", len(res.Oath)))
+		for _, o := range res.Oath {
+			b.WriteString("  ")
+			b.WriteString(o.Title)
+			b.WriteString(" — ")
+			b.WriteString(o.Summary)
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	} else {
+		b.WriteString("⚔️ oath: (none yet) — inscribe principles with kind=\"principle\" and they auto-load here.\n\n")
+	}
+
+	// Section 3: fading echoes (stale lore).
+	if len(res.Echoes) > 0 {
+		b.WriteString(fmt.Sprintf("👻 %d fading echo(es):\n", len(res.Echoes)))
+		for _, e := range res.Echoes {
+			b.WriteString("  ")
+			b.WriteString(e.Title)
+			b.WriteString(" [")
+			b.WriteString(e.Reason)
+			b.WriteString("]\n")
+		}
+		b.WriteString("\n")
+	} else {
+		b.WriteString("👻 fading echoes: (none) — stale research/decision entries surface here as they age out.\n\n")
+	}
+
+	// Section 4: top bounty.
+	switch {
+	case res.NoUnclaimed:
+		b.WriteString("🎯 bounties: ✅ no unclaimed tasks — all done, blocked, or in progress.\n")
+	case res.TopQuest != nil:
+		q := res.TopQuest
+		b.WriteString("🎯 top bounty:\n")
+		b.WriteString("  ")
+		b.WriteString(q.ID)
+		if q.Priority != "" {
+			b.WriteString(" [")
+			b.WriteString(string(q.Priority))
+			b.WriteString("]")
+		}
+		if q.Epic != "" {
+			b.WriteString(" · ")
+			b.WriteString(q.Epic)
+		}
+		b.WriteString("\n  ")
+		b.WriteString(q.Subject)
+		b.WriteString("\n")
+		if len(q.Files) > 0 {
+			b.WriteString("  files: ")
+			b.WriteString(strings.Join(q.Files, ", "))
+			b.WriteString("\n")
+		}
+		for _, a := range q.Acceptance {
+			b.WriteString("  ✓ ")
+			b.WriteString(a)
+			b.WriteString("\n")
+		}
+		b.WriteString("→ call quest_accept(quest_id=\"")
+		b.WriteString(q.ID)
+		b.WriteString("\")")
+	default:
+		// Project registered but no quests posted at all.
+		b.WriteString("🎯 bounties: (none yet) — call quest_post to seed the board.")
+	}
+
+	// Section 5: parallelism.
+	switch {
+	case res.ParallelCount > 0 && res.TopQuest != nil:
+		b.WriteString(fmt.Sprintf("\n\n⚡ %d task(s) can run in parallel with %s:\n",
+			res.ParallelCount, res.TopQuest.ID))
+		for _, pair := range res.ParallelPairs {
+			b.WriteString("  · ")
+			b.WriteString(pair.B)
+			b.WriteString("\n")
+		}
+	default:
+		b.WriteString("\n\n⚡ parallelism: (none available) — additional unclaimed quests with no file overlap and no dep conflict will surface here.\n")
+	}
+
+	return b.String()
+}
+
+// inferProjectFromCWD auto-resolves the active project when the agent
+// called guild_session_start() with no arg. Opens the quest DB
+// read-only-ish (shared with other handlers via openQuestDB) and hands
+// off to project.ResolveFull, which runs the standard CLI lookup order:
+// git-toplevel of cwd → LookupByPath in the projects table, with a
+// git-common-dir worktree fallback if the worktree path isn't registered.
+// Errors propagate verbatim — project.ResolveFull's message already lists
+// registered project names when the cwd isn't among them, which is the
+// most useful recovery hint for the agent.
+//
+// The second return value is true when the resolution succeeded only via
+// the worktree fallback (cwd is a linked worktree; the main-repo path was
+// registered). Callers use this to vary narration.
+//
+// The resolver is indirected through mcpProjectResolver so tests can
+// swap in fake Getwd / GitToplevel / GitCommonDir seams.
+func inferProjectFromCWD(ctx context.Context) (projectID string, viaFallback bool, err error) {
+	db, err := openQuestDB(ctx)
+	if err != nil {
+		return "", false, fmt.Errorf("open quest db: %w", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	res, err := mcpProjectResolver.ResolveFull(ctx, db, "")
+	if err != nil {
+		return "", false, err
+	}
+	return res.Project.ID, res.ViaWorktreeFallback, nil
+}
+
+// emptyBountiesSkeleton is the absolute-cold-start fallback shown when
+// the quest DB can't even be opened (fresh install, no `guild init`
+// run yet). Mirrors the five section headers so first-time users see
+// the same shape they'll see once the project is registered.
+func emptyBountiesSkeleton() string {
+	var b strings.Builder
+	b.WriteString("no bounties yet — run lore init / quest init to register the project, or post your first quest.\n\n")
+	b.WriteString("📋 last briefing: (none yet)\n")
+	b.WriteString("⚔️ oath: (none yet)\n")
+	b.WriteString("👻 fading echoes: (none)\n")
+	b.WriteString("🎯 bounties: (none yet)\n")
+	b.WriteString("⚡ parallelism: (none available)\n")
+	return b.String()
+}

@@ -1,0 +1,26 @@
+# Binaries
+/guild
+/sqlcheck
+/docgen
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+
+# Coverage
+coverage.txt
+coverage.html
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Go
+vendor/
+
+# Claude Code worktrees (transient agent-owned)
+.claude/

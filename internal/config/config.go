@@ -1,0 +1,234 @@
+package config
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+
+	"github.com/BurntSushi/toml"
+	"github.com/spf13/pflag"
+)
+
+// userConfigDir returns the path to ~/.guild/config.toml (layer 2).
+func userConfigDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("config: resolve home dir: %w", err)
+	}
+	return filepath.Join(home, ".guild", "config.toml"), nil
+}
+
+// repoConfigPath returns the path to <repo>/.guild/config.toml (layer 3).
+// It derives the repo root by walking up from dir looking for a ".guild"
+// directory.  The caller passes the result of os.Getwd() or a test fixture.
+// Returns ("", nil) when no per-project config directory is found — this is
+// NOT an error (the directory is opt-in).
+func repoConfigPath(startDir string) (string, error) {
+	dir := startDir
+	for {
+		candidate := filepath.Join(dir, ".guild", "config.toml")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			// Reached filesystem root without finding .guild/
+			return "", nil
+		}
+		dir = parent
+	}
+}
+
+// fileLayer decodes a TOML file at path into dst, applying ONLY the keys
+// declared in the file (using BurntSushi/toml MetaData.IsDefined for
+// granular per-key detection).  Missing file is silently ignored (not an
+// error).
+//
+// The function updates each field of dst individually so that keys absent
+// from the TOML file do NOT clobber values already present from a lower layer.
+func fileLayer(path string, dst *Config) error {
+	if path == "" {
+		return nil
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("config: read %s: %w", path, err)
+	}
+
+	// Decode into a temporary Config so we can inspect MetaData.IsDefined.
+	var tmp Config
+	md, err := toml.Decode(string(raw), &tmp)
+	if err != nil {
+		return fmt.Errorf("config: parse %s: %w", path, err)
+	}
+
+	// Apply only the keys that were present in this file.
+	if md.IsDefined("project") {
+		dst.Project = tmp.Project
+	}
+	if md.IsDefined("scoring", "w_fts") {
+		dst.Scoring.WFTS = tmp.Scoring.WFTS
+	}
+	if md.IsDefined("scoring", "w_recency") {
+		dst.Scoring.WRecency = tmp.Scoring.WRecency
+	}
+	if md.IsDefined("scoring", "half_life_days") {
+		dst.Scoring.HalfLifeDays = tmp.Scoring.HalfLifeDays
+	}
+	if md.IsDefined("scoring", "title_match_boost") {
+		dst.Scoring.TitleMatchBoost = tmp.Scoring.TitleMatchBoost
+	}
+	if md.IsDefined("scoring", "title_token_boost") {
+		dst.Scoring.TitleTokenBoost = tmp.Scoring.TitleTokenBoost
+	}
+	if md.IsDefined("inscribe", "principle_max_words") {
+		dst.Inscribe.PrincipleMaxWords = tmp.Inscribe.PrincipleMaxWords
+	}
+	if md.IsDefined("inscribe", "bloat_severe_threshold") {
+		dst.Inscribe.BloatSevereThreshold = tmp.Inscribe.BloatSevereThreshold
+	}
+	if md.IsDefined("telemetry", "usage_log") {
+		dst.Telemetry.UsageLog = tmp.Telemetry.UsageLog
+	}
+	return nil
+}
+
+// envLayer applies environment-variable overrides (layer 4).
+//
+// Variables honoured:
+//   - GUILD_PROJECT        → Config.Project
+//   - GUILD_NO_USAGE_LOG=1 → Config.NoUsageLog = true; also sets Telemetry.UsageLog = false
+//   - GUILD_NO_EMOJI=1     → Config.NoEmoji = true
+func envLayer(dst *Config) {
+	if v := os.Getenv("GUILD_PROJECT"); v != "" {
+		dst.Project = v
+	}
+	if parseBoolEnv("GUILD_NO_USAGE_LOG") {
+		dst.NoUsageLog = true
+		dst.Telemetry.UsageLog = false
+	}
+	if parseBoolEnv("GUILD_NO_EMOJI") {
+		dst.NoEmoji = true
+	}
+}
+
+// parseBoolEnv returns true for env values "1", "true", "yes" (case-insensitive).
+func parseBoolEnv(key string) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return false
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		// Accept "1" / "yes" as truthy beyond what ParseBool handles.
+		return v == "1" || v == "yes" || v == "YES"
+	}
+	return b
+}
+
+// flagLayer applies CLI flag overrides (layer 5).
+//
+// Flags consulted (all optional — if not defined in the FlagSet they are
+// silently skipped):
+//   - --project / -p         → Config.Project
+//   - --no-emoji              → Config.NoEmoji
+//   - --no-usage-log          → Config.NoUsageLog
+//   - --w-fts                 → Config.Scoring.WFTS
+//   - --w-recency             → Config.Scoring.WRecency
+func flagLayer(flags *pflag.FlagSet, dst *Config) {
+	if flags == nil {
+		return
+	}
+	applyStringFlag(flags, "project", &dst.Project)
+	applyBoolFlag(flags, "no-emoji", &dst.NoEmoji)
+	applyBoolFlag(flags, "no-usage-log", &dst.NoUsageLog)
+	applyFloat64Flag(flags, "w-fts", &dst.Scoring.WFTS)
+	applyFloat64Flag(flags, "w-recency", &dst.Scoring.WRecency)
+}
+
+// applyStringFlag copies a flag value into dst only when the flag is
+// registered in fs AND was explicitly set on the command line.
+func applyStringFlag(fs *pflag.FlagSet, name string, dst *string) {
+	f := fs.Lookup(name)
+	if f == nil || !f.Changed {
+		return
+	}
+	*dst = f.Value.String()
+}
+
+// applyBoolFlag copies a bool flag value into dst only when explicitly set.
+func applyBoolFlag(fs *pflag.FlagSet, name string, dst *bool) {
+	f := fs.Lookup(name)
+	if f == nil || !f.Changed {
+		return
+	}
+	b, err := strconv.ParseBool(f.Value.String())
+	if err == nil {
+		*dst = b
+	}
+}
+
+// applyFloat64Flag copies a float64 flag value into dst only when explicitly set.
+func applyFloat64Flag(fs *pflag.FlagSet, name string, dst *float64) {
+	f := fs.Lookup(name)
+	if f == nil || !f.Changed {
+		return
+	}
+	fv, err := strconv.ParseFloat(f.Value.String(), 64)
+	if err == nil {
+		*dst = fv
+	}
+}
+
+// Load builds the merged Config by applying all five layers in order.
+//
+// flags may be nil (CLI callers pass cobra's FlagSet; the MCP server passes nil).
+// Missing config files are not errors — built-in defaults fill the gaps.
+//
+// Callers own the returned *Config and may mutate it freely.
+func Load(flags *pflag.FlagSet) (*Config, error) {
+	// Layer 1 — built-in defaults.
+	cfg := defaults()
+
+	// Layer 2 — user-wide ~/.guild/config.toml.
+	userPath, err := userConfigDir()
+	if err != nil {
+		return nil, err
+	}
+	if err := fileLayer(userPath, &cfg); err != nil {
+		return nil, err
+	}
+
+	// Layer 3 — per-project <repo>/.guild/config.toml.
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("config: getwd: %w", err)
+	}
+	repoPath, err := repoConfigPath(cwd)
+	if err != nil {
+		return nil, err
+	}
+	if err := fileLayer(repoPath, &cfg); err != nil {
+		return nil, err
+	}
+
+	// Layer 4 — environment variables.
+	envLayer(&cfg)
+
+	// Layer 5 — CLI flags (highest precedence).
+	flagLayer(flags, &cfg)
+
+	// Reconcile convenience booleans: if any layer set NoUsageLog=true,
+	// keep Telemetry.UsageLog consistent (the canonical storage for
+	// persistence to TOML; NoUsageLog is the merged runtime bool).
+	if !cfg.Telemetry.UsageLog {
+		cfg.NoUsageLog = true
+	}
+
+	return &cfg, nil
+}

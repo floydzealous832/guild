@@ -1,0 +1,241 @@
+# .goreleaser.yml — goreleaser v2 release configuration for github.com/mathomhaus/guild
+#
+# Key invariants enforced here (§10.3, §10.9, §10.10):
+#   - CGO_ENABLED=0 in every build (pure-Go SQLite, static binary promise)
+#   - -trimpath for reproducible builds
+#   - 6-target matrix: {linux,darwin,windows} × {amd64,arm64}
+#   - SHA256 checksums file named checksums.txt
+#   - Keyless cosign signing of the checksums file (OIDC-based, no key to manage)
+#   - Homebrew cask published to github.com/mathomhaus/homebrew-tap
+#   - tar.gz archives for Unix; zip for Windows
+#   - LICENSE + README.md included in every archive
+#
+# Schema pin: goreleaser v2 (tested with v2.15.3)
+# Run `goreleaser check` to validate this file locally.
+
+version: 2
+
+project_name: guild
+
+# ─── metadata ────────────────────────────────────────────────────────────────
+
+metadata:
+  mod_timestamp: "{{ .CommitTimestamp }}"
+
+before:
+  hooks:
+    # Ensure modules are tidy before building. The go.sum must be committed;
+    # this catches any drift.
+    - go mod tidy
+
+# ─── builds ──────────────────────────────────────────────────────────────────
+
+builds:
+  - id: guild
+    main: ./cmd/guild
+    binary: guild
+
+    # CGO_ENABLED=0 is the product promise (§10.3): pure-Go SQLite ships
+    # inside the binary; no system libsqlite3 dependency at runtime.
+    env:
+      - CGO_ENABLED=0
+
+    # -trimpath removes local build paths from the binary for reproducibility.
+    # -s -w strips debug symbols and DWARF info to reduce binary size.
+    # ldflags stamp version/commit/date injected by goreleaser templates.
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+    # mod_timestamp pins the module timestamps to the commit timestamp,
+    # making zip/tar entries deterministic (reproducible builds).
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+    goos:
+      - linux
+      - darwin
+      - windows
+
+    goarch:
+      - amd64
+      - arm64
+
+    # windows/arm64 with modernc.org/sqlite has been verified locally:
+    # GOOS=windows GOARCH=arm64 CGO_ENABLED=0 go build ./... → exit 0
+    # No exclusions needed.
+
+# ─── archives ────────────────────────────────────────────────────────────────
+
+archives:
+  - id: guild
+    ids:
+      - guild
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- .Arch }}
+    # tar.gz for Unix; zip for Windows (consistent with platform norms).
+    # goreleaser v2.15: use format_overrides with formats (plural).
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    # Include the LICENSE and README.md in every archive
+    files:
+      - LICENSE
+      - README.md
+
+# ─── checksums ───────────────────────────────────────────────────────────────
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+# ─── signing (cosign keyless / OIDC) ─────────────────────────────────────────
+#
+# Decision journal: cosign keyless (OIDC) chosen over minisign.
+# Rationale:
+#   1. No key management: keyless cosign uses the GitHub Actions OIDC token to
+#      sign via Sigstore's Fulcio CA. There is no signing key to rotate, store
+#      in secrets, or leak.
+#   2. Auditability: the signature is anchored in Rekor's append-only
+#      transparency log — anyone can verify `cosign verify-blob` without
+#      pre-distributing a public key.
+#   3. Modern default: the broader Go ecosystem (ko, syft, govulncheck) has
+#      converged on Sigstore/cosign. Users of guild are likely already familiar.
+#   4. Trade-off acknowledged: keyless cosign requires network access to
+#      Fulcio and Rekor during signing. Minisign is simpler and offline-capable,
+#      but adds key-rotation operational overhead. For an OSS project on GitHub
+#      Actions, keyless wins.
+#
+# Signs ONLY the checksums file (not individual archives).
+# Verifying the checksum signature implies transitively verifying all archives.
+# This is the recommended pattern from goreleaser's supply-chain-security docs.
+#
+# Required GitHub Actions env: id-token: write (set in release.yml).
+#
+# Verify a downloaded release locally:
+#   cosign verify-blob \
+#     --certificate checksums.txt.pem \
+#     --signature checksums.txt.sig \
+#     --certificate-identity-regexp="https://github.com/mathomhaus/guild" \
+#     --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
+#     checksums.txt
+
+signs:
+  - cmd: cosign
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--output-certificate=${certificate}"
+      - "--output-signature=${signature}"
+      - "${artifact}"
+      - "--yes"  # required on cosign 2.0+; suppresses confirmation prompt
+    artifacts: checksum
+    output: true
+
+# ─── release (GitHub) ────────────────────────────────────────────────────────
+
+release:
+  github:
+    owner: mathomhaus
+    name: guild
+  # draft: false publishes the release immediately on tag push.
+  # Set to true if you want a human to review before publishing.
+  draft: false
+  # Replace existing release assets if re-running goreleaser on the same tag.
+  replace_existing_artifacts: true
+  name_template: "guild {{.Version}}"
+  # Ship install.sh as a release asset so users can:
+  #   curl -fsSL https://github.com/mathomhaus/guild/releases/latest/download/install.sh | sh
+  # The installer itself downloads checksums.txt and SHA256-verifies the
+  # tarball before extracting.
+  extra_files:
+    - glob: install.sh
+
+# ─── Homebrew cask ─────────────────────────────────────────────────────────────
+#
+# goreleaser v2.15 uses homebrew_casks (brews is deprecated).
+# goreleaser generates the Ruby cask and pushes it to
+# github.com/mathomhaus/homebrew-tap on every versioned release.
+#
+# Setup required (one-time, by the repo owner):
+#   1. Create repo: https://github.com/mathomhaus/homebrew-tap
+#   2. Create a GitHub fine-grained PAT (classic or fine-grained) with
+#      Contents:write scope on the homebrew-tap repo.
+#   3. Add it as a secret named HOMEBREW_TAP_GITHUB_TOKEN in the guild repo:
+#      Settings → Secrets → Actions → New repository secret
+#
+# Users install with: brew install mathomhaus/tap/guild
+# (Homebrew maps 'mathomhaus/tap' to 'github.com/mathomhaus/homebrew-tap').
+# Shared tap — future mathomhaus tools (randalf, mathom, …) drop their
+# casks into the same repo; each tool's goreleaser pushes independently.
+
+homebrew_casks:
+  - name: guild
+    ids:
+      - guild
+    repository:
+      owner: mathomhaus
+      name: homebrew-tap
+      # HOMEBREW_TAP_GITHUB_TOKEN must be set in the release workflow env.
+      # It needs Contents:write permission on the homebrew-tap repo.
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Casks
+    homepage: "https://github.com/mathomhaus/guild"
+    description: "persistent cognition for AI agents — task + knowledge lifecycle"
+    license: "Apache-2.0"
+    commit_author:
+      name: goreleaser-bot
+      email: bot@goreleaser.com
+    commit_msg_template: "chore: update guild cask to {{.Tag}}"
+    binaries:
+      - guild
+    # xattr hook removes macOS quarantine on unsigned binaries.
+    # guild is a CLI tool (not a macOS .app), so this is required for
+    # smooth installation on macOS without Gatekeeper warnings.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/guild"]
+          end
+    # skip_upload: auto skips publishing pre-release tags (v1.0.0-rc1 etc.)
+    skip_upload: auto
+    url:
+      verified: "github.com/mathomhaus/guild"
+
+# ─── snapshot ────────────────────────────────────────────────────────────────
+#
+# Snapshot builds (goreleaser build --snapshot) append -next to the version.
+# Used for local dry-runs and CI PR builds.
+
+snapshot:
+  version_template: "{{ .Tag }}-next"
+
+# ─── changelog ───────────────────────────────────────────────────────────────
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "Merge pull request"
+      - "Merge branch"
+  groups:
+    - title: "New Features"
+      regexp: "^feat"
+      order: 0
+    - title: "Bug Fixes"
+      regexp: "^fix"
+      order: 1
+    - title: "Other"
+      order: 999

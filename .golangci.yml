@@ -1,0 +1,43 @@
+# Strict lint config per §10.8.
+#
+# Required linters (spec-locked): errcheck, govet, staticcheck, gosec,
+# contextcheck, gocritic. CI fails on any warning.
+#
+# Custom SQL-safety linter (§10b.0b / QUEST-18):
+#   go build -o sqlcheck ./cmd/sqlcheck
+#   go vet -vettool=./sqlcheck ./...
+# This is a separate CI step — see cmd/sqlcheck/README.md for details.
+# golangci-lint plugin wiring requires a CGO .so plugin; deferred as follow-up.
+
+run:
+  timeout: 5m
+
+linters:
+  disable-all: true
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - gosec
+    - contextcheck
+    - gocritic
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  exclude-dirs:
+    - vendor
+
+linters-settings:
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - style
+      - performance
+    disabled-checks:
+      # hugeParam trips on MCP SDK tool handlers — the
+      # ToolHandlerFor[In, Out] signature REQUIRES In by value. Fixing
+      # would mean fighting the SDK generic; the struct fits entirely
+      # in one stack frame so the perf cost is nil. See internal/mcp/
+      # tools_*.go.
+      - hugeParam
