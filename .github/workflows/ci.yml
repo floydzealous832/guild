@@ -50,20 +50,21 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
-    # Pinned v1.60 refuses to lint Go 1.25 targets (built with Go 1.23).
-    # Migrating to golangci-lint v2 requires a .golangci.yml schema migration.
-    # Tracked as a post-v0.1.0 follow-up; local `make check` still runs lint.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25'
           cache: true
-      - uses: golangci/golangci-lint-action@v6
-        with:
-          version: v1.60
-          args: --timeout=5m
+      # Install golangci-lint via go install so it gets compiled with the
+      # runner's Go 1.25 toolchain. The prebuilt v1.60 binary from
+      # golangci-lint-action was built with Go 1.23 and refuses to lint
+      # go.mod's 1.25 target; compiling from source makes the version
+      # check agree with the target.
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
+      - name: Run golangci-lint
+        run: golangci-lint run --timeout=5m
 
   # Custom SQL-safety analyzer (§10b.0b / QUEST-18). Runs as go vet -vettool
   # rather than a golangci-lint plugin (plugin wiring needs a CGO .so — deferred).
