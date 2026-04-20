@@ -31,8 +31,26 @@ permissions:
   packages: write   # future: GHCR image publish (not used yet)
 
 jobs:
+  # Gate goreleaser on a green test+build of the tagged commit. Prevents
+  # releases being cut from a broken-main snapshot. Mirrors the ubuntu test
+  # job in ci.yml — fast (~90s) and covers the primary platform.
+  preflight:
+    name: preflight tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+      - name: Test
+        run: go test -race -count=1 ./...
+      - name: Build
+        run: go build -trimpath ./...
+
   goreleaser:
     name: goreleaser release
+    needs: preflight
     runs-on: ubuntu-latest
 
     steps:
