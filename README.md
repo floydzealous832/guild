@@ -36,28 +36,16 @@ $ guild --version
 
 Also available via `brew install mathomhaus/tap/guild` or `go install github.com/mathomhaus/guild/cmd/guild@latest`.
 
-### 2. Register guild with your editor
-
-```bash
-$ guild mcp install
-```
-
-This prints the register command for every supported client. Copy the line for yours and run it. For Claude Code it looks like:
-
-```bash
-$ claude mcp add guild --scope user -- /usr/local/bin/guild mcp serve
-```
-
-### 3. Initialize your project
+### 2. Initialize your project
 
 ```bash
 cd ~/projects/myapp
 guild init
 ```
 
-This writes an `AGENTS.md` block so your agent knows guild is available.
+`init` is a guided setup: it registers the project, writes an `AGENTS.md` block, and — for each MCP client it detects on your machine — offers to register guild so your agent can see it. Answer the prompts; you're done when it says `Next: open this repo in your AI agent`.
 
-### 4. Start a new session
+### 3. Start a new session
 
 In your editor, tell the agent: *"start a guild session for myapp."*
 

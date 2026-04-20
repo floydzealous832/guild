@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -77,6 +78,12 @@ type InitOptions struct {
 	LoreDBPath string
 	// QuestDBPath overrides the default ~/.guild/quest.db path. Used by tests.
 	QuestDBPath string
+
+	// clients overrides detected MCP clients in tests. Nil → use detectHosts().
+	clients []Client
+	// execCmdFn is passed through to MCPInstall when invoking MCP registration.
+	// Nil → real exec.Command. Injected in tests to capture the registration call.
+	execCmdFn func(name string, arg ...string) *exec.Cmd
 }
 
 // InitResult carries what Init accomplished so callers can inspect or log.
@@ -127,8 +134,18 @@ func Init(ctx context.Context, repoRoot string, opts InitOptions) (*InitResult, 
 		return nil, fmt.Errorf("install: check AGENTS.md: %w", err)
 	}
 
-	// Detect which MCP host(s) are present for the registration hint.
-	detected := detectHosts()
+	// Detect which MCP host(s) are present. opts.clients lets tests
+	// inject a fake set without running real detection.
+	var detected []Client
+	if opts.clients != nil {
+		for _, c := range opts.clients {
+			if c.Detected() {
+				detected = append(detected, c)
+			}
+		}
+	} else {
+		detected = detectHosts()
+	}
 	binPath := "guild"
 	if exe, err := resolveAbsBinPath(os.Executable); err == nil {
 		binPath = exe
@@ -247,12 +264,27 @@ func Init(ctx context.Context, repoRoot string, opts InitOptions) (*InitResult, 
 		fmt.Fprintln(opts.Out, "  ✓ AGENTS.md guild section up-to-date — skipped")
 	}
 
-	// --- MCP hint --------------------------------------------------------------
+	// --- MCP registration ------------------------------------------------------
+	// Delegate to MCPInstall with Run: true so each detected client gets a
+	// per-client [Y/n] confirm and the registration command actually executes.
+	// No-client path keeps the manual-setup hint.
 	if len(detected) > 0 {
-		for _, c := range detected {
-			fmt.Fprintf(opts.Out, "  ✓ MCP command for %s (run to register; restart agent after):\n        %s\n",
-				c.Name, c.InstallCmdDisplay(binPath))
+		fmt.Fprintln(opts.Out)
+		mcpOpts := MCPInstallOptions{
+			Run:          true,
+			Yes:          opts.Yes,
+			Out:          opts.Out,
+			In:           opts.In,
+			clients:      detected,
+			executableFn: os.Executable,
+			execCmdFn:    opts.execCmdFn,
 		}
+		if _, err := MCPInstall(ctx, mcpOpts); err != nil {
+			return nil, fmt.Errorf("install: mcp register: %w", err)
+		}
+	} else {
+		fmt.Fprintln(opts.Out)
+		fmt.Fprintln(opts.Out, "  [i] no MCP client detected — see `guild mcp install` for manual setup")
 	}
 
 	fmt.Fprintln(opts.Out)
