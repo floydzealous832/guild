@@ -40,12 +40,43 @@ Requires macOS or Linux and an MCP-enabled editor (Claude Code, Codex, Cursor, e
 
 ### 1. Install
 
+**Recommended (pre-built binary with semantic retrieval):**
+
 ```bash
-$ curl -fsSL https://github.com/mathomhaus/guild/releases/latest/download/install.sh | sh
-$ guild --version
+curl -fsSL https://github.com/mathomhaus/guild/releases/latest/download/install.sh | sh
+guild --version
 ```
 
-Also available via `brew install mathomhaus/tap/guild` or `go install github.com/mathomhaus/guild/cmd/guild@latest`.
+Or via Homebrew:
+
+```bash
+brew install mathomhaus/tap/guild
+```
+
+Both paths install a binary built with `-tags=withembed`, so semantic
+retrieval works out of the box with no extra steps.
+
+**Clone and build (ship-ready, embed included):**
+
+```bash
+make install   # stages ONNX assets, then go install -tags=withembed
+```
+
+**Dev-only (faster compile, no semantic retrieval):**
+
+```bash
+make install-fast   # go install without -tags=withembed
+```
+
+**`go install` from module proxy (keyword-only retrieval):**
+
+```bash
+go install github.com/mathomhaus/guild/cmd/guild@latest
+```
+
+The Go toolchain cannot embed assets via `@latest`; this path gives
+you BM25 keyword search but not semantic (vector) retrieval. Use
+`install.sh` or `brew` for the full experience.
 
 ### 2. Initialize your project
 
@@ -169,6 +200,11 @@ State lives in SQLite under `~/.guild/`. Switching MCP clients requires no expor
 
 See [AGENTS.md](./AGENTS.md) for the agent-facing contributor contract
 and [CONTRIBUTING.md](./CONTRIBUTING.md) for the human-facing workflow.
+
+Maintainers shipping releases that embed the int8 ONNX retrieval
+model: see [docs/MODEL.md](./docs/MODEL.md) for the two-workflow build
+pattern (model production vs binary release), the `.model-version`
+pin, and the rebuild cadence.
 
 ---
 
